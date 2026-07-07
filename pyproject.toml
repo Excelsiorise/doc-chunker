@@ -1,0 +1,22 @@
+[project]
+name = "doc-chunker"
+version = "0.1.0"
+description = "Context-aware document parsing and chunking module for nanobot take-home."
+requires-python = ">=3.11"
+dependencies = [
+    "pypdf>=5.0.0",
+    "openpyxl>=3.1.0",
+]
+
+[project.scripts]
+doc-chunker = "doc_chunker.cli:console_main"
+
+[project.entry-points."nanobot.tools"]
+document_chunker = "doc_chunker.nanobot_tool:DocumentChunkerTool"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -1,0 +1,7 @@
+Project Overview
+
+The document chunker parses local documents into structured blocks before splitting them into chunks.
+
+Validation Plan
+
+The demo should find this sentence when searching for chunker validation.
