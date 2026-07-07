@@ -1,0 +1,15 @@
+Document ingestion policy
+
+This sample file is intentionally longer than the tiny example file. It is designed to show how max_chars and overlap_chars affect chunking. The important keyword for this paragraph is governance. A document pipeline should keep the parser boundary separate from chunking so each layer can be tested independently.
+
+Operational rules
+
+Every ingested document should produce a stable doc_id, a parser name, a chunk count, and a source file path. The local store writes this information to manifest.json. The chunk content is written to chunks.jsonl, where every line is one JSON object. This makes debugging simple because a developer can open the index files directly.
+
+Search behavior
+
+The current search implementation is a keyword baseline. It lowercases the query and chunk text, then checks whether the whole query appears or whether every query token appears somewhere in the chunk. This is not BM25 and it is not semantic search. The goal is to prove the retrieval path before adding ranking complexity.
+
+Nanobot integration
+
+The nanobot adapter wraps the core pipeline as a Tool. The agent loop can call execute with action ingest or action search. The adapter should validate missing path and missing query cases, then return ToolResult error messages instead of crashing the agent process.

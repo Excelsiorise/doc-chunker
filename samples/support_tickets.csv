@@ -1,0 +1,6 @@
+ticket_id,customer,topic,severity,summary
+T-1001,Acme Robotics,chunk search,high,Search results should include chunk metadata and neighboring chunk ids.
+T-1002,Northwind Labs,pdf parsing,medium,PDF pages should produce page locator information for each extracted block.
+T-1003,Contoso Health,nanobot integration,high,The document_chunker tool should return structured JSON for ingest and search actions.
+T-1004,Fabrikam Energy,bm25 upgrade,low,BM25 can improve ranking after the simple keyword search baseline is verified.
+T-1005,Blue Yonder,manifest validation,medium,manifest.json should show parser name chunk count and source file path.

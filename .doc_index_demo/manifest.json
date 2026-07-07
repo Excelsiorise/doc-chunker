@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "chunk_count": 2,
+  "documents": [
+    {
+      "doc_id": "project-brief-364a82fb21",
+      "source_file": "samples\\project_brief.md",
+      "parser": "md",
+      "chunk_count": 7,
+      "chunking": {
+        "max_chars": 220,
+        "overlap_chars": 40
+      },
+      "updated_at": "2026-07-07T07:02:33.604409+00:00"
+    },
+    {
+      "doc_id": "support-tickets-f768884940",
+      "source_file": "samples\\support_tickets.csv",
+      "parser": "csv",
+      "chunk_count": 6,
+      "chunking": {
+        "max_chars": 180,
+        "overlap_chars": 30
+      },
+      "updated_at": "2026-07-07T07:03:03.630537+00:00"
+    },
+    {
+      "doc_id": "long-policy-ed9dde8280",
+      "source_file": "D:\\Lenovo\\doc-chunker\\samples\\long_policy.txt",
+      "parser": "txt",
+      "chunk_count": 2,
+      "chunking": {
+        "max_chars": 1000,
+        "overlap_chars": 150
+      },
+      "updated_at": "2026-07-07T08:53:13.883983+00:00"
+    }
+  ],
+  "doc_id": "long-policy-ed9dde8280",
+  "source_file": "D:\\Lenovo\\doc-chunker\\samples\\long_policy.txt",
+  "parser": "txt",
+  "chunking": {
+    "max_chars": 1000,
+    "overlap_chars": 150
+  },
+  "updated_at": "2026-07-07T08:53:13.883983+00:00"
+}
