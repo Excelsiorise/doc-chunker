@@ -1,6 +1,5 @@
 {
-  "version": 1,
-  "chunk_count": 2,
+  "chunk_count": 27,
   "documents": [
     {
       "doc_id": "project-brief-364a82fb21",
@@ -34,14 +33,17 @@
         "overlap_chars": 150
       },
       "updated_at": "2026-07-07T08:53:13.883983+00:00"
+    },
+    {
+      "doc_id": "document-chunker-validation-sample-53221b42f5",
+      "source_file": "D:\\Lenovo\\doc-chunker\\samples\\Document Chunker Validation Sample.pdf",
+      "parser": "pdf",
+      "chunk_count": 12,
+      "chunking": {
+        "max_chars": 500,
+        "overlap_chars": 150
+      },
+      "updated_at": "2026-07-08T02:27:01.590228+00:00"
     }
-  ],
-  "doc_id": "long-policy-ed9dde8280",
-  "source_file": "D:\\Lenovo\\doc-chunker\\samples\\long_policy.txt",
-  "parser": "txt",
-  "chunking": {
-    "max_chars": 1000,
-    "overlap_chars": 150
-  },
-  "updated_at": "2026-07-07T08:53:13.883983+00:00"
+  ]
 }

@@ -49,6 +49,57 @@ python scripts/demo_retriever.py .doc_index "keyword" --expand section
 
 如果从仓库源码直接运行且尚未安装包，请设置 `PYTHONPATH=src`；运行测试时测试套件已经会注入 `src`。
 
+## 通过 nanobot webui 调用工具
+
+除了 CLI，也可以在真实运行的 nanobot agent 里通过聊天触发 `document_chunker` 工具，验证 `nanobot.tools` entry_points 集成路径确实能跑通（不只是 `entry_points()` 查询）。
+
+### 1. 安装到 nanobot 所在的 Python 环境
+
+`document_chunker` 工具通过 `pyproject.toml` 里的 `[project.entry-points."nanobot.tools"]` 暴露，必须和 `nanobot` 装在同一个环境里才能被发现：
+
+```bash
+conda activate docchunk   # 或任何已装好 nanobot-ai 的环境
+python -m pip install -e .   # 在 doc-chunker 仓库根目录下执行
+```
+
+验证 entry_points 是否注册成功：
+
+```bash
+python -c "from importlib.metadata import entry_points; print(list(entry_points(group='nanobot.tools')))"
+# 期望看到: [EntryPoint(name='document_chunker', value='doc_chunker.nanobot_tool:DocumentChunkerTool', group='nanobot.tools')]
+```
+
+### 2. 启动 nanobot webui
+
+```bash
+conda activate docchunk
+nanobot webui
+```
+
+`nanobot webui` 会拉起 gateway 并在 `http://127.0.0.1:8765` 打开浏览器界面（首次运行前需要先 `nanobot onboard` 配置好 provider/model）。如果 gateway 已经在跑，浏览器里直接刷新页面即可，不需要重复执行。
+
+### 3. 在聊天框里输入自然语言指令（不是斜杠命令）
+
+nanobot webui 没有"直接调用某个 tool"的斜杠命令语法；`document_chunker(action=..., ...)` 只是文档里描述 LLM function-calling 内部调用形式的写法。要让 agent 真正调用这个工具，需要在聊天框里用自然语言描述任务，并把参数写清楚，避免模型自己猜路径：
+
+```text
+请使用 document_chunker 工具完成以下两步，并把工具返回的完整 JSON 展示给我：
+
+1. action=ingest，导入文件 D:\Lenovo\doc-chunker\samples\Document Chunker Validation Sample.pdf，
+   store_dir 设为 D:\Lenovo\doc-chunker\.doc_index_demo，max_chars=500。
+2. action=search，在同一个 store_dir 里搜索 "retention policy"，expand=section。
+```
+
+如果是刚执行完第 1 步的 `pip install -e .`，建议先在聊天框发一次 `/restart`，确保这次会话重新加载了最新的 entry_points 插件列表，再发上面这段指令。
+
+### 4. 独立核实结果
+
+工具调用面板（Activity）里能看到一条 `document_chunker` 调用记录，包含参数和返回 JSON。也可以脱离 webui、直接读落盘文件核实结果没有被模型编造：
+
+```bash
+python scripts/demo_retriever.py .doc_index_demo "retention policy" --expand section
+```
+
 ## 支持的输入
 
 - `.pdf`：通过 `pypdf` 按页抽取文本；如果 PDF 自带 outline/bookmark tree，则从其中读取标题结构（否则退化为无标题结构，并在 chunk metadata 中记录 `pdf_headings: unavailable`）。

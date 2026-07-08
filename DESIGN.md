@@ -2,9 +2,8 @@
 
 ## 目标
 
-构建一个小而可运行的文档导入与分块模块，用来展示上下文感知的 chunk 边界，以及与 nanobot 集成的清晰路径。这个模块不是完整的 RAG 平台：第一版刻意避开向量数据库、embedding 训练和独立 MCP server。
+构建一个小而可运行的文档导入与分块模块，用来展示上下文感知的 chunk 边界，以及与 nanobot 集成的清晰路径。这个模块不是完整的 RAG 平台。
 
-本文档反映的是一次由 `docs/process/REVIEW_FINDINGS.md` 和 `docs/process/TODO.md` 驱动的升级之后，又根据原始作业文本删掉非必要内容后的状态；完整历史见 `docs/process/UPGRADE_SUMMARY.md`。
 
 ## 架构
 
@@ -73,7 +72,7 @@ SQLite/vector-store 后端没有实现；这里抽象的意义在于“如果再
 
 ## 存储选择
 
-选择 JSONL 加 manifest，而不是 SQLite。JSONL 在面试中容易人工检查，容易 diff，也容易用测试验证。Manifest 顶层只保留聚合的 `chunk_count` 和 `documents[]` 列表；它不再在顶层重复最后一次导入文档的字段，避免在多文档 store 中出现顶层字段和聚合计数描述不同文档的隐性坑。非法的 `overlap_chars >= max_chars` 会通过 `UserWarning` 被 clamp，并在每个文档的 `chunking` metadata 中记录为 `overlap_adjusted`/`requested_overlap_chars`，而不是悄悄套用。
+选择 JSONL 加 manifest，而不是 SQLite。JSONL 容易人工检查，容易 diff，也容易用测试验证。Manifest 顶层只保留聚合的 `chunk_count` 和 `documents[]` 列表；它不再在顶层重复最后一次导入文档的字段，避免在多文档 store 中出现顶层字段和聚合计数描述不同文档的隐性坑。非法的 `overlap_chars >= max_chars` 会通过 `UserWarning` 被 clamp，并在每个文档的 `chunking` metadata 中记录为 `overlap_adjusted`/`requested_overlap_chars`，而不是悄悄套用。
 
 ## 导出接口
 
