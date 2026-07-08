@@ -4,6 +4,16 @@
 
 构建一个小而可运行的文档导入与分块模块，用来展示上下文感知的 chunk 边界，以及与 nanobot 集成的清晰路径。这个模块不是完整的 RAG 平台。
 
+## 需求对照
+
+按题目原文六条核心能力要求，逐条标注对应实现位置，方便直接定位，细节见下文各章节，这里不重复展开：
+
+1. **文档解析**（PDF/WORD/EXCEL + 基础元数据）→ `parsers.py`，见下文"解析器选择"。
+2. **上下文感知的分块策略**（父子、相邻、章节层级、语义段落、表格上下文）→ `chunker.py` 的边界规则（`heading_path`/`block_type` 硬边界、`prev`/`next` 链接）+ `store.py` 的 `get_neighbors`/`get_section`，见"上下文感知分块"。
+3. **分块质量**（按段落/句子切分、避免拦腰截断、可配置块大小与重叠）→ `chunker.py` 的句子边界切分与 `ChunkingConfig`，同样在"上下文感知分块"里说明。
+4. **存储抽象**（ChunkStore/DocumentStore，至少一个内存或本地文件后端）→ 见"存储抽象"与"存储选择"。
+5. **导出接口**（返回标准结构的 chunk 列表，供下游检索模块消费）→ 见"导出接口"。
+6. **与基座及上下游的关系**（nanobot Tool/Skill/独立模块，边界与调用路径）→ 见"Nanobot 边界"；选型对比记录在 `DECISIONS.md` D001。
 
 ## 架构
 
@@ -119,11 +129,11 @@ nanobot 适配层刻意保持很薄。它只负责：
 
 如果再给一周，按优先级：
 
-1. 添加 SQLite 作为可选 `ChunkStore` 后端，包含 document/chunk 表；当前抽象已经把这件事限制为新增一个类。
-2. 在现有关键词匹配上加入 BM25 排序，仍然不引入 embedding 依赖；`search()` 的签名已经把排序与存储隔离，因此不影响调用方。
-3. 增强表格分块，支持合并单元格、多行表头和 Word 表格（`w:tbl`）。
-4. 添加一个集成测试：让真实 nanobot `ToolLoader`/`ToolRegistry` 加载已安装的 entry point，而不只是检查 `entry_points()` 能解析（见 `TESTING.md`）。
-5. 添加 prev/next 链接完整性检查和基于变更检测的 re-ingest skip；两者都在本项目升级过程中做过原型，又因为不在原始范围内被移除（见 `DECISIONS.md` D009），但它们都很小、边界清楚，有更多时间时可以合理加回。
+
+1. 在现有关键词匹配上加入 BM25 排序，仍然不引入 embedding 依赖；`search()` 的签名已经把排序与存储隔离，因此不影响调用方;before/after参数。
+2. 增强表格分块，支持合并单元格、多行表头和 Word 表格（`w:tbl`）;增强pdf的解析方式（标题-排版）; heading path。
+3. 添加一个集成测试：让真实 nanobot `ToolLoader`/`ToolRegistry` 加载已安装的 entry point，而不只是检查 `entry_points()` 能解析（见 `TESTING.md`）。
+4. 添加 prev/next 链接完整性检查和基于变更检测的 re-ingest skip；两者都在本项目升级过程中做过原型，又因为不在原始范围内被移除（见 `DECISIONS.md` D009），但它们都很小、边界清楚，有更多时间时可以合理加回。
 
 ## 更长期路线图（一周之外）
 
