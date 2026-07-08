@@ -148,6 +148,8 @@ def parse_pdf(path: Path) -> list[DocumentBlock]:
         raise RuntimeError("pypdf is required to parse .pdf files") from exc
 
     reader = PdfReader(str(path))
+    page_headings = _pdf_page_headings(reader)
+    headings_available = bool(page_headings)
     blocks: list[DocumentBlock] = []
     for page_index, page in enumerate(reader.pages, start=1):
         text = (page.extract_text() or "").strip()
@@ -158,9 +160,60 @@ def parse_pdf(path: Path) -> list[DocumentBlock]:
                     source_file=str(path),
                     block_type="page",
                     locator={"page": page_index},
+                    heading_path=page_headings.get(page_index, []),
+                    metadata={"pdf_headings": "outline" if headings_available else "unavailable"},
                 )
             )
     return blocks
+
+
+def _pdf_page_headings(reader: Any) -> dict[int, list[str]]:
+    """Map page number -> [nearest preceding bookmark title], read from the
+    PDF's own outline/bookmark tree via pypdf. Deterministic and free: no
+    font-size heuristics, no OCR. PDFs without an outline get an empty
+    mapping and the caller records that explicitly rather than pretending
+    heading_path was ever populated (see DESIGN.md Known Limits)."""
+    try:
+        outline = reader.outline
+    except Exception:
+        return {}
+
+    flat: list[tuple[int, str]] = []
+
+    def walk(items: Any) -> None:
+        for item in items:
+            if isinstance(item, list):
+                walk(item)
+                continue
+            try:
+                page_number = reader.get_destination_page_number(item) + 1
+            except Exception:
+                continue
+            title = getattr(item, "title", None)
+            if title:
+                flat.append((page_number, str(title)))
+
+    walk(outline)
+    if not flat:
+        return {}
+
+    flat.sort(key=lambda pair: pair[0])
+    total_pages = len(reader.pages)
+    mapping: dict[int, list[str]] = {}
+    for i, (start_page, title) in enumerate(flat):
+        end_page = flat[i + 1][0] - 1 if i + 1 < len(flat) else total_pages
+        for page_number in range(start_page, max(start_page, end_page) + 1):
+            # setdefault, not overwrite: when a page has more than one
+            # heading (common -- a page rarely starts exactly on a
+            # heading boundary), the first heading in reading order wins
+            # for that page, and later same-page headings only get to
+            # "claim" pages further down that have no heading of their
+            # own yet. Overwriting unconditionally here meant the *last*
+            # heading on a page silently won, mislabeling every earlier
+            # section on that page -- the exact class of bug this whole
+            # heading_path mechanism exists to prevent.
+            mapping.setdefault(page_number, [title])
+    return mapping
 
 
 def _paragraph_style(para: ET.Element) -> str:

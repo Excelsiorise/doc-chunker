@@ -1,72 +1,72 @@
-# Doc Chunker Implementation Plan
+# 文档分块器实施计划
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **给 agentic workers 的说明：** 必需子技能：使用 `superpowers:subagent-driven-development`（推荐）或 `superpowers:executing-plans`，按任务逐项实现本计划。步骤使用 checkbox（`- [ ]`）语法跟踪。
 
-**Goal:** Build a runnable document parsing, context-aware chunking, local storage, CLI, and nanobot Tool adapter module for the take-home assignment.
+**目标：** 为 take-home assignment 构建一个可运行的模块，包含文档解析、上下文感知分块、本地存储、CLI 和 nanobot Tool 适配层。
 
-**Architecture:** Keep the core `doc_chunker` package independent from nanobot. Parse files into normalized `DocumentBlock` records, chunk those records into linked `Chunk` records, persist them as JSONL plus a manifest, then expose the same ingest/search behavior through CLI and a thin nanobot Tool plugin.
+**架构：** 保持核心 `doc_chunker` 包独立于 nanobot。将文件解析成规范化 `DocumentBlock` 记录，把这些记录切成带链接的 `Chunk` 记录，以 JSONL + manifest 持久化，然后通过 CLI 和一个薄 nanobot Tool 插件暴露同一套 ingest/search 行为。
 
-**Tech Stack:** Python 3.11+, pytest, stdlib zip/xml/csv/json/pathlib, optional `pypdf` for PDF and `openpyxl` for Excel, nanobot Tool ABC for adapter tests.
+**技术栈：** Python 3.11+、pytest、stdlib zip/xml/csv/json/pathlib、可选 `pypdf`（PDF）和 `openpyxl`（Excel），以及用于适配层测试的 nanobot Tool ABC。
 
 ---
 
-### Task 1: Core Data Model And Chunker
+### 任务 1：核心数据模型与 chunker
 
-**Files:**
-- Create: `doc-chunker/src/doc_chunker/models.py`
-- Create: `doc-chunker/src/doc_chunker/chunker.py`
-- Test: `doc-chunker/tests/test_chunker.py`
+**文件：**
+- 创建：`doc-chunker/src/doc_chunker/models.py`
+- 创建：`doc-chunker/src/doc_chunker/chunker.py`
+- 测试：`doc-chunker/tests/test_chunker.py`
 
-- [ ] Write tests for chunk size limits, heading metadata, and prev/next links.
-- [ ] Run the tests and confirm they fail because the package does not exist.
-- [ ] Implement dataclasses and chunking logic with configurable `max_chars` and `overlap_chars`.
-- [ ] Run the tests and confirm they pass.
+- [ ] 为 chunk size 限制、heading metadata、prev/next 链接编写测试。
+- [ ] 运行测试，并确认它们因为包还不存在而失败。
+- [ ] 实现 dataclass 和带可配置 `max_chars`、`overlap_chars` 的分块逻辑。
+- [ ] 运行测试，并确认它们通过。
 
-### Task 2: Parsers
+### 任务 2：解析器
 
-**Files:**
-- Create: `doc-chunker/src/doc_chunker/parsers.py`
-- Test: `doc-chunker/tests/test_parsers.py`
+**文件：**
+- 创建：`doc-chunker/src/doc_chunker/parsers.py`
+- 测试：`doc-chunker/tests/test_parsers.py`
 
-- [ ] Write tests using generated DOCX/XLSX/PDF fixtures where possible.
-- [ ] Run parser tests and confirm they fail before implementation.
-- [ ] Implement plain text, DOCX, XLSX, and PDF parsers that return `DocumentBlock` records.
-- [ ] Run parser tests and confirm they pass.
+- [ ] 尽可能使用生成的 DOCX/XLSX/PDF fixture 编写测试。
+- [ ] 运行 parser 测试，并确认它们在实现前失败。
+- [ ] 实现 plain text、DOCX、XLSX 和 PDF parser，返回 `DocumentBlock` 记录。
+- [ ] 运行 parser 测试，并确认它们通过。
 
-### Task 3: Store And Search
+### 任务 3：存储与搜索
 
-**Files:**
-- Create: `doc-chunker/src/doc_chunker/store.py`
-- Test: `doc-chunker/tests/test_store.py`
+**文件：**
+- 创建：`doc-chunker/src/doc_chunker/store.py`
+- 测试：`doc-chunker/tests/test_store.py`
 
-- [ ] Write tests for JSONL round trip, manifest content, and simple keyword search.
-- [ ] Run store tests and confirm they fail before implementation.
-- [ ] Implement `DocumentStore` with `manifest.json` and `chunks.jsonl`.
-- [ ] Run store tests and confirm they pass.
+- [ ] 为 JSONL round trip、manifest 内容和简单关键词 search 编写测试。
+- [ ] 运行 store 测试，并确认它们在实现前失败。
+- [ ] 使用 `manifest.json` 和 `chunks.jsonl` 实现 `DocumentStore`。
+- [ ] 运行 store 测试，并确认它们通过。
 
-### Task 4: CLI And Nanobot Tool Adapter
+### 任务 4：CLI 与 nanobot Tool 适配层
 
-**Files:**
-- Create: `doc-chunker/src/doc_chunker/cli.py`
-- Create: `doc-chunker/src/doc_chunker/nanobot_tool.py`
-- Create: `doc-chunker/pyproject.toml`
-- Test: `doc-chunker/tests/test_cli_and_tool.py`
+**文件：**
+- 创建：`doc-chunker/src/doc_chunker/cli.py`
+- 创建：`doc-chunker/src/doc_chunker/nanobot_tool.py`
+- 创建：`doc-chunker/pyproject.toml`
+- 测试：`doc-chunker/tests/test_cli_and_tool.py`
 
-- [ ] Write tests for CLI ingest/search and nanobot tool schema/execution contract.
-- [ ] Run tests and confirm they fail before implementation.
-- [ ] Implement CLI subcommands and `DocumentChunkerTool`.
-- [ ] Run tests and confirm they pass.
+- [ ] 为 CLI ingest/search 和 nanobot tool schema/execution contract 编写测试。
+- [ ] 运行测试，并确认它们在实现前失败。
+- [ ] 实现 CLI 子命令和 `DocumentChunkerTool`。
+- [ ] 运行测试，并确认它们通过。
 
-### Task 5: Documentation And Verification
+### 任务 5：文档与验证
 
-**Files:**
-- Create: `doc-chunker/README.md`
-- Create: `doc-chunker/DESIGN.md`
-- Create: `doc-chunker/TESTING.md`
-- Modify: `doc-chunker/AI_WORKFLOW.md`
+**文件：**
+- 创建：`doc-chunker/README.md`
+- 创建：`doc-chunker/DESIGN.md`
+- 创建：`doc-chunker/TESTING.md`
+- 修改：`doc-chunker/AI_WORKFLOW.md`
 
-- [ ] Document quickstart, architecture, decisions, tests, and known limits.
-- [ ] Run `pytest`.
-- [ ] Run `python -m doc_chunker.cli --help`.
-- [ ] Run a small ingest/search demo.
-- [ ] Record verification evidence in `TESTING.md` and `AI_WORKFLOW.md`.
+- [ ] 记录 quickstart、架构、决策、测试和已知限制。
+- [ ] 运行 `pytest`。
+- [ ] 运行 `python -m doc_chunker.cli --help`。
+- [ ] 运行一个小型 ingest/search demo。
+- [ ] 在 `TESTING.md` 和 `AI_WORKFLOW.md` 中记录验证证据。

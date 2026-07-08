@@ -39,6 +39,12 @@ class DocumentChunkerTool(Tool):
                 "max_chars": {"type": "integer", "minimum": 80, "default": 1000},
                 "overlap_chars": {"type": "integer", "minimum": 0, "default": 150},
                 "limit": {"type": "integer", "minimum": 1, "default": 5},
+                "expand": {
+                    "type": "string",
+                    "enum": ["neighbors", "section"],
+                    "description": "Restore context around each search hit: 'neighbors' walks "
+                    "prev/next chunks, 'section' returns the whole heading section.",
+                },
             },
             "required": ["action", "store_dir"],
             "additionalProperties": False,
@@ -67,6 +73,7 @@ class DocumentChunkerTool(Tool):
                     "matches": DocumentStore(store_dir).search(
                         str(query),
                         limit=int(kwargs.get("limit") or 5),
+                        expand=kwargs.get("expand"),
                     ),
                 }
             else:

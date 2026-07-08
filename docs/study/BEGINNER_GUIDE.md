@@ -1,4 +1,4 @@
-# Beginner Guide: 读懂 doc-chunker 和 nanobot 集成
+# 入门指南：读懂 doc-chunker 和 nanobot 集成
 
 这份文档是给完全小白看的。目标不是让你背代码,而是让你能说清楚:
 
@@ -1940,3 +1940,905 @@ python -c "from importlib.metadata import entry_points; print([ep.name for ep in
 - Unstructured documentation: Partitioning and chunking  
   https://docs.unstructured.io/open-source/core-functionality/partitioning  
   https://docs.unstructured.io/open-source/core-functionality/chunking
+
+---
+
+## 20. 新版升级补充手册: 现在版本比上一版强在哪里
+
+前面 1 到 19 章主要解释的是第一版小闭环:
+
+```text
+parse -> chunk -> store -> CLI/nanobot tool
+```
+
+现在版本在这个闭环上做了升级。这份手册经历过三轮修订——先是照着一份内部评审文档
+(`REVIEW_FINDINGS.md`/`TODO.md`)几乎实现了所有能想到的加固,然后拿到题目的完整原文后,
+把其中找不到直接对应的部分又砍掉了(存储层第二个后端、可插拔分块策略、完整性校验、
+变更检测、Skill 文件、对照评测脚本)。**下面看到的是砍完之后的最终状态**,不是最初那一版
+最大的版本;取舍过程见 `DECISIONS.md` D008/D009。
+
+新版真正保留下来的核心变化:
+
+1. 存储层从一个具体类升级成了 `ChunkStore` 抽象(仍然只有 `DocumentStore` 一个后端,原文
+   要求"至少一个"就够)。
+2. 搜索结果可以恢复上下文(`expand=neighbors`/`expand=section`),不只是返回命中的小片段。
+3. chunk 边界更安全,不会跨标题或 block 类型误合并。
+4. 中文句子切分、英文小数点、metadata 保留等细节 bug 被修复。
+5. CLI 新增 `export` 子命令,`scripts/demo_retriever.py` 证明导出的 `chunks.jsonl` 能被
+   不认识本包的下游程序直接消费。
+6. PDF 会尝试读取 outline/bookmark 作为标题路径。
+
+核心逻辑可以用一句话记住:
+
+> 新版把"能跑"升级成了"能解释、边界更干净、上下文能恢复",但没有为了显得完整而堆砌原文
+> 没要求的功能。
+
+---
+
+## 21. 新版整体流程图
+
+现在导入文档时,流程比旧版多了一步(边界规则):
+
+```text
+输入文件路径
+  -> parse_document()
+  -> list[DocumentBlock]
+  -> chunk_blocks()        (heading_path/block_type 改变时强制切块,不跨边界合并)
+  -> ChunkStore.write_document()
+  -> manifest.json + chunks.jsonl
+  -> 返回 ok/doc_id/chunk_count
+```
+
+搜索时,流程也升级了:
+
+```text
+query
+  -> ChunkStore.search(query, expand=None|"neighbors"|"section")
+       -> expand=None: 只返回命中的 chunk
+       -> expand="neighbors": 返回命中 chunk + 前后 chunk
+       -> expand="section": 返回同一个 heading_path 下的整段上下文
+```
+
+这个升级解决的是 RAG 里非常常见的问题:
+
+```text
+检索命中的 chunk 太小,答案需要的信息在前后文里。
+```
+
+旧版虽然保存了 `prev_chunk_id` 和 `next_chunk_id`,但没有真正用起来。新版的 `get_neighbors()` 和 `search(expand="neighbors")` 把这条链路用起来了。
+
+---
+
+## 22. 新版文件地图: 哪些文件最值得看
+
+如果你只想快速理解新版,按这个顺序看:
+
+```text
+src/doc_chunker/store.py
+src/doc_chunker/chunker.py
+src/doc_chunker/cli.py
+src/doc_chunker/nanobot_tool.py
+src/doc_chunker/parsers.py
+docs/process/UPGRADE_SUMMARY.md
+tests/test_store_contract.py
+scripts/demo_retriever.py
+```
+
+各自作用:
+
+- `store.py`: 新版最大变化之一。定义 `ChunkStore` 抽象、`DocumentStore` 文件后端、上下文扩展查询方法。
+- `chunker.py`: `chunk_blocks()`,新增边界规则(不跨 heading_path/block_type 合并)和中文分句/小数点修复。
+- `cli.py`: 新增 `export` 子命令,给 `search` 增加 `--expand`。
+- `nanobot_tool.py`: Tool schema 新增 `expand` 参数。
+- `parsers.py`: PDF 现在会尝试读取 outline/bookmark 作为标题路径,CSV 也被支持。
+- `UPGRADE_SUMMARY.md`: 看"这次升级到底改了什么,以及后来又撤销了什么"。
+- `test_store_contract.py`: 看什么叫"契约测试"——测的是 `ChunkStore` 基类方法的行为,不是 `DocumentStore` 的实现细节,以后加新后端时这套测试可以原样复用。
+- `demo_retriever.py`: 证明下游可以不 import `doc_chunker`,直接读导出的 JSONL。
+
+---
+
+## 23. 新版核心概念一: `ChunkStore` 抽象
+
+旧版可以简单理解成:
+
+```text
+DocumentStore = 负责把 chunks 写到 JSONL,再从 JSONL 搜索
+```
+
+新版变成:
+
+```text
+ChunkStore = 所有存储后端都必须遵守的接口
+DocumentStore = 目前唯一的具体后端,写 manifest.json + chunks.jsonl
+```
+
+代码位置:
+
+```text
+doc-chunker/src/doc_chunker/store.py
+```
+
+### 23.1 为什么要有抽象
+
+小白可以这样理解:
+
+> 抽象就是先规定“你必须会做什么”,但不规定“你内部怎么做”。
+
+`ChunkStore` 规定了后端至少要实现:
+
+```python
+write_document(...)
+load_chunks()
+get_document_info(doc_id)
+```
+
+只要某个后端实现了这三个基础方法,它就自动拥有:
+
+```python
+get_by_document(doc_id)
+get_neighbors(chunk_id)
+get_section(chunk_id)
+search(query, expand=...)
+```
+
+这就是抽象的价值:
+
+```text
+共同能力写在基类里。
+不同后端只写自己的存储细节。
+```
+
+### 23.2 为什么现在只有一个后端
+
+题目原文要求是"至少实现一个内存**或**本地文件(JSONL/SQLite)后端"——注意是"或",不是"和",不要求两个都做。`DocumentStore`(JSONL)已经满足这一条。
+
+早期升级草稿里确实加过一个 `InMemoryChunkStore`(纯 Python dict,不写磁盘),目的是想更进一步证明"这个接口真的能被第二个后端实现,不是空喊的设计名词"。但这不是原始要求必需的,而且在这个项目的数据规模下,"内存后端跑测试更快"这个常见理由也不成立——`DocumentStore` 走临时目录跑全部测试也就零点几秒。讨论后决定把它删掉,只留抽象层本身,避免为了"展示"而多写一个不解决实际问题的类。
+
+抽象层和契约测试(`tests/test_store_contract.py`)都保留了下来:`store` fixture 仍然是参数化写法,现在只有 `"jsonl"` 一个 case,以后真要加 SQLite 或向量库,只需要在 `_make_store()` 里加一行、实现三个 primitives,不需要改测试代码本身。
+
+### 23.3 面试怎么说
+
+可以这样说:
+
+> 我把存储层抽成了 `ChunkStore`。目前只有一个落盘的 JSONL 后端 `DocumentStore`——原始要求是"至少一个内存或本地文件后端",没有要求两个都做,所以我没有额外加一个内存后端去凑数。后端只需要实现写入、读取全部 chunks、读取文档信息这几个 primitives,搜索和上下文扩展都写在基类里,而且契约测试是参数化写的,以后加 SQLite 或向量库时,只是多写一个类、多加一行 fixture 参数,不用改 parser、chunker、CLI、nanobot adapter,也不用改测试逻辑。
+
+---
+
+## 24. 新版核心概念二: chunk 边界规则
+
+`chunker.chunk_blocks()` 还是原来那一个函数,题目原文说的是"设计一种或多种分块策略",
+一种、解释清楚取舍就够了,所以这版没有再搭一层可插拔的策略接口(早期草稿加过、又删了,
+见 `DECISIONS.md` D009)。真正升级的是它内部的边界规则:
+
+```text
+尽量按句子切。
+遇到中文句号、问号、感叹号也能切(不要求后面有空格)。
+保护小数点,避免把 3.2 切成 3. 和 2。
+不会把不同 heading_path 的内容合进同一个 chunk。
+不会把不同 block_type 的内容合进同一个 chunk。
+```
+
+这里最重要的是:
+
+```text
+heading_path 和 block_type 现在是硬边界。
+```
+
+什么叫硬边界?
+
+如果前一个 block 属于:
+
+```text
+heading_path = ["合同条款"]
+block_type = "paragraph"
+```
+
+下一个 block 属于:
+
+```text
+heading_path = ["付款信息"]
+block_type = "paragraph"
+```
+
+即使两个 block 合起来没有超过 `max_chars`,新版也不会把它们合进同一个 chunk。
+
+因为那样会造成误标注:
+
+```text
+chunk 的 heading_path 只能保存一个标题路径。
+如果把两个章节混在一起,第二段内容可能被错误标成第一段标题。
+```
+
+这是 RAG 里很危险的错误,因为模型可能引用错章节。
+
+### 24.2 面试怎么说
+
+可以这样说:
+
+> `chunk_blocks()` 用一种策略解决问题:句子边界优先,且 `heading_path`/`block_type` 是硬边界,宁可多切一个 chunk,也不让来源上下文被污染。题目要求"一种或多种",我选择把一种做扎实、把取舍讲清楚,而不是为了显得"可扩展"去搭一个只有一个真实实现的策略接口——真要加第二种切分方式(比如 token-aware 或 semantic chunker),函数签名本来就允许新写一个函数替换调用点,不需要提前设计接口。
+
+---
+
+## 25. 新版核心概念三: `expand` 上下文恢复
+
+旧版搜索返回的是:
+
+```text
+命中的 chunk
+```
+
+新版搜索可以返回:
+
+```text
+命中的 chunk + 它周围的上下文
+```
+
+对应参数:
+
+```text
+expand=None
+expand="neighbors"
+expand="section"
+```
+
+### 25.1 `expand=None`
+
+这是最简单的搜索:
+
+```powershell
+python -m doc_chunker.cli search .doc_index "renewal terms"
+```
+
+返回结构大概是:
+
+```json
+{
+  "ok": true,
+  "matches": [
+    {
+      "chunk_id": "...",
+      "text": "...",
+      "locator": {...}
+    }
+  ]
+}
+```
+
+适合只想看命中片段的场景。
+
+### 25.2 `expand="neighbors"`
+
+命令:
+
+```powershell
+python -m doc_chunker.cli search .doc_index "renewal terms" --expand neighbors
+```
+
+含义:
+
+```text
+命中某个 chunk 后,
+沿着 prev_chunk_id 找前一个,
+沿着 next_chunk_id 找后一个,
+把它们一起作为 context 返回。
+```
+
+结果结构会变成:
+
+```json
+{
+  "chunk": {"chunk_id": "...", "text": "..."},
+  "expand": "neighbors",
+  "context": [
+    {"chunk_id": "前一个", "text": "..."},
+    {"chunk_id": "命中的", "text": "..."},
+    {"chunk_id": "后一个", "text": "..."}
+  ]
+}
+```
+
+这个适合:
+
+```text
+答案可能在命中片段前后。
+你不想拿整个章节,只想拿附近一点上下文。
+```
+
+### 25.3 `expand="section"`
+
+命令:
+
+```powershell
+python -m doc_chunker.cli search .doc_index "renewal terms" --expand section
+```
+
+含义:
+
+```text
+命中某个 chunk 后,
+找到同一个 doc_id 下 heading_path 相同的所有 chunks,
+把这一整节作为 context 返回。
+```
+
+这叫动态 small-to-big:
+
+```text
+先用小 chunk 检索。
+命中后再取更大的上下文。
+```
+
+注意它没有额外存一个 parent chunk。它是在读取时临时聚合:
+
+```text
+chunk.heading_path 相同 -> 认为属于同一节
+```
+
+### 25.4 为什么 `expand` 很重要
+
+RAG 的常见失败是:
+
+```text
+检索到了关键词,
+但回答问题所需的限定条件在上一段或下一段。
+```
+
+比如 chunk A 写:
+
+```text
+The renewal term is 12 months.
+```
+
+chunk B 写:
+
+```text
+This applies only if notice is not sent 30 days before expiration.
+```
+
+如果只返回 A,模型可能回答不完整。`expand="neighbors"` 可以把 B 一起带回来。
+
+### 25.5 面试怎么说
+
+可以这样说:
+
+> 新版不只是保存 `prev_chunk_id` 和 `next_chunk_id`,还真正用它们实现了 `get_neighbors()` 和 `search(expand="neighbors")`。同时实现了 `get_section()`,按相同 `heading_path` 动态聚合一个章节。这是 small-to-big retrieval 的轻量实现:小 chunk 用来提高命中精度,命中后再恢复足够上下文给模型回答。
+
+---
+
+## 26. 新版核心概念四: manifest 变得更像正式数据契约
+
+旧版的 `manifest.json` 比较像“最后一次写入的摘要”。
+
+新版的 `manifest.json` 结构更清楚了(顶层字段和单个文档的字段不再混在一起):
+
+```json
+{
+  "chunk_count": 12,
+  "documents": [
+    {
+      "doc_id": "example-xxxx",
+      "source_file": "samples/example.docx",
+      "parser": "docx",
+      "chunk_count": 5,
+      "chunking": {
+        "max_chars": 1000,
+        "overlap_chars": 150
+      },
+      "updated_at": "..."
+    }
+  ]
+}
+```
+
+顶层只有全局 `chunk_count` 和 `documents[]` 列表,不会再出现"最后一次导入的文档字段被摊平
+到顶层、和全局字数混在一起"这种旧版才有的问题(如果一个 store 里有多篇文档,旧版顶层的
+`doc_id`/`source_file` 只反映最后一次 ingest 的那篇,容易让人误以为整个 store 只有一个
+文档)。
+
+注意:这里没有 `schema_version`、`content_hash`、`strategy` 字段——早期升级草稿加过,后来
+发现原始需求里没有"版本号"或"变更检测"这类要求,又删掉了(见 `DECISIONS.md` D009)。
+重复 ingest 同一个文档,现在还是会完整重新解析和重新分块,没有跳过逻辑。
+
+### 26.1 `overlap_adjusted`
+
+如果用户传了非法配置:
+
+```text
+overlap_chars >= max_chars
+```
+
+旧版会悄悄修正。新版会:
+
+```text
+发出 UserWarning
+把 requested_overlap_chars 和 overlap_adjusted 写进 manifest
+```
+
+这比静默修正更诚实:
+
+```text
+系统帮你修了,但也留下记录。
+```
+
+### 26.4 面试怎么说
+
+可以这样说:
+
+> 新版 manifest 不再把最后一个文档的字段和全局字段混在顶层,而是用全局 `chunk_count`、`documents[]` 分开表达。每个文档记录自己的 parser、chunk_count 和 chunking 参数;overlap 被自动修正时也会记录,避免静默行为。没有做 `schema_version` 或内容变更检测——原始需求里没有这两条,加了反而是没有对应验收点的自选功能。
+
+注意:chunk 之间的 `prev_chunk_id`/`next_chunk_id` 链接目前没有自动完整性校验(早期草稿加过
+`validate_export()`,后来因为原文没有这条要求而删掉,见 `DECISIONS.md` D009)。如果链接
+不小心坏掉(比如 `A.next_chunk_id = B` 但 `B.prev_chunk_id != A`),`get_neighbors()` 会
+静默漏掉上下文,而不是报错——这是当前版本一个诚实记录在案的已知不足(见 `DESIGN.md` Known
+Limits)。
+
+---
+
+## 27. 新版核心概念五: `export` 和下游消费 demo
+
+新版 CLI 新增:
+
+```powershell
+python -m doc_chunker.cli export .doc_index --doc-id <doc_id> --out chunks.jsonl
+```
+
+也可以导出 JSON:
+
+```powershell
+python -m doc_chunker.cli export .doc_index --doc-id <doc_id> --out chunks.json --format json
+```
+
+这个功能证明:
+
+```text
+chunks.jsonl 不是内部临时文件,
+而是一个下游系统可以消费的数据契约。
+```
+
+`scripts/demo_retriever.py` 更进一步:
+
+```text
+它直接读 chunks.jsonl,
+不 import doc_chunker,
+也能做简单搜索和 expand。
+```
+
+这对面试很有价值。它说明你不是只写了一个 Python 包内部能跑的玩具,而是考虑了:
+
+```text
+下游系统怎么拿数据?
+如果下游不是 Python 包怎么办?
+数据格式能不能独立理解?
+```
+
+---
+
+## 28. 新版 parser 的小升级
+
+### 29.1 PDF outline/bookmark 标题
+
+旧版 PDF 主要是按页提取文本:
+
+```text
+每页 -> 一个 page block
+```
+
+新版会尝试读取 PDF 自带的 outline/bookmark:
+
+```python
+reader.outline
+```
+
+如果 PDF 有目录书签,就把最近的书签标题放进:
+
+```text
+heading_path
+```
+
+如果没有,metadata 会明确记录:
+
+```json
+{"pdf_headings": "unavailable"}
+```
+
+这很重要:
+
+```text
+不是假装 PDF 没有标题,
+而是诚实说明这个 PDF 没有可用的 outline 信号。
+```
+
+### 29.2 CSV 支持
+
+新版 `parse_document()` 支持:
+
+```text
+.csv
+```
+
+逻辑和 Excel 类似:
+
+```text
+第一行作为 headers
+后续每行变成 table_row block
+```
+
+但 CSV 没有 sheet,所以通常不会有 `heading_path`。
+
+### 29.3 parser metadata 会保留到 chunk
+
+旧版有些 parser-level metadata 可能在 chunk 阶段丢掉。
+
+新版 `_append_chunk()` 会把第一个 block 的 metadata 合并进 chunk metadata。
+
+例如 Excel:
+
+```json
+{
+  "headers": ["Risk", "Owner", "Status"],
+  "block_types": ["table_row"],
+  "block_count": 1
+}
+```
+
+这让下游不仅能读正文,还能知道表头、PDF heading 状态、DOCX style 等结构信息。
+
+---
+
+## 29. 新版 CLI 怎么用
+
+### 29.1 导入文档
+
+```powershell
+cd D:\Lenovo\doc-chunker
+$env:PYTHONPATH="src"
+python -m doc_chunker.cli ingest samples\example.docx --out .doc_index
+```
+
+带参数:
+
+```powershell
+python -m doc_chunker.cli ingest samples\example.docx --out .doc_index --max-chars 500 --overlap-chars 80
+```
+
+### 29.2 搜索
+
+普通搜索:
+
+```powershell
+python -m doc_chunker.cli search .doc_index "renewal terms"
+```
+
+带邻居上下文:
+
+```powershell
+python -m doc_chunker.cli search .doc_index "renewal terms" --expand neighbors
+```
+
+带章节上下文:
+
+```powershell
+python -m doc_chunker.cli search .doc_index "renewal terms" --expand section
+```
+
+### 29.3 导出
+
+```powershell
+python -m doc_chunker.cli export .doc_index --doc-id <doc_id> --out chunks_export.jsonl
+```
+
+导出 JSON:
+
+```powershell
+python -m doc_chunker.cli export .doc_index --doc-id <doc_id> --out chunks_export.json --format json
+```
+
+---
+
+## 30. 新版 nanobot Tool 参数
+
+`DocumentChunkerTool` 仍然只有一个工具名:
+
+```text
+document_chunker
+```
+
+但参数比旧版更多:
+
+```json
+{
+  "action": "ingest",
+  "store_dir": "...",
+  "path": "...",
+  "max_chars": 1000,
+  "overlap_chars": 150
+}
+```
+
+搜索:
+
+```json
+{
+  "action": "search",
+  "store_dir": "...",
+  "query": "renewal terms",
+  "limit": 5,
+  "expand": "section"
+}
+```
+
+新增参数:
+
+- `expand`: 搜索时恢复上下文,目前是 `"neighbors"` 或 `"section"`。
+
+可以在 WebUI 里这样说:
+
+```text
+请调用 document_chunker 工具导入 D:\Lenovo\doc-chunker\samples\example.docx,
+store_dir 使用 D:\Lenovo\doc-chunker\.ui_index,
+max_chars=500,
+overlap_chars=80。
+```
+
+然后:
+
+```text
+请调用 document_chunker 工具在 D:\Lenovo\doc-chunker\.ui_index 搜索 "renewal terms",
+expand 使用 section,
+展示命中的 chunk、context、locator 和 heading_path。
+```
+
+关于要不要额外写一份 nanobot Skill(教 agent 何时/如何调用这个 Tool):题目原文第 6 条写的是
+"它可以是...Tool 或 Skill,也可以混合"——这是给的一组可选实现方式,不是两个都要。这版选择
+只做 Tool(entry_points 注册),没有再加 Skill 文件(早期草稿加过,又删了,见
+`DECISIONS.md` D009)。
+
+---
+
+## 31. 新版测试在证明什么
+
+旧版测试主要证明:
+
+```text
+parser/chunker/store/CLI/tool 能跑通
+```
+
+新版测试更强调“不变量”和“契约”。
+
+### 33.1 不变量是什么
+
+不变量就是系统必须一直满足的规则。
+
+例如:
+
+```text
+chunk 不能跨 heading_path 边界。
+chunk 不能跨 block_type 边界。
+中文句子不能因为没有空格就被硬切坏。
+小数点不能被当成句号切开。
+prev/next 链接必须互相对应。
+metadata 不能在 chunk 阶段丢掉。
+```
+
+这些规则不是 UI 效果,而是数据质量底线。
+
+### 33.2 契约测试是什么
+
+`tests/test_store_contract.py` 是新版非常值得讲的点。
+
+它的思路是:
+
+```text
+不管以后有几个后端实现了 ChunkStore,
+只要它说自己是 ChunkStore,
+它就必须通过同一套测试。
+```
+
+这叫 contract test。
+
+它验证的是接口承诺(`get_neighbors`/`get_section`/`search`/`validate_export` 这些基类方法该有的行为),不是某个具体实现(`DocumentStore`)的内部细节。测试文件里的 `store` fixture 是参数化写法,目前只有 `"jsonl"` 一个 case——这不是"忘了写第二个",而是当前只有一个后端(见 23.2),这套写法的价值在于:以后真的加了第二个后端,不用改这份测试,只需要在 `_make_store()` 里加一行。
+
+### 33.3 为什么 PDF 测试也升级了
+
+旧版 PDF 测试曾经依赖额外库或跳过真实路径。
+
+新版用自建 PDF fixture,确保测试真正跑到:
+
+```text
+parse_pdf()
+pypdf
+```
+
+这避免了“测试通过但真实代码没被测”的问题。
+
+---
+
+## 32. 新版相对上一版的能力对照表
+
+| 主题 | 上一版 | 现在版本 |
+| --- | --- | --- |
+| 存储 | 只有具体类 `DocumentStore`,没有接口 | `ChunkStore` 抽象(ABC)+ `DocumentStore` 实现,契约测试参数化以便以后加后端 |
+| 搜索上下文 | 只返回命中 chunk | 支持 `expand=neighbors` 和 `expand=section` |
+| prev/next | 只保存字段 | 真正被 `get_neighbors()` 使用 |
+| section 上下文 | 没有 | `get_section()` 动态聚合同标题路径 chunks |
+| 标题边界 | 可能跨 heading 合并 | heading_path/block_type 改变时强制 flush |
+| 中文句子 | 可能因为无空格切分失败 | 支持中文标点后无空格切分 |
+| 小数点 | 可能被当句号 | 保护 `3.2` 这类小数 |
+| metadata | parser metadata 可能丢失 | 合并进 chunk metadata |
+| PDF 标题 | 主要按页 | 尝试读取 outline/bookmark |
+| manifest | 顶层字段容易混淆 | 顶层只有 `chunk_count` + `documents[]`,不再和单文档字段混在一起 |
+| CLI | ingest/search | ingest/search/export + `--expand` |
+| nanobot Tool | action/path/query 等基础参数 | 新增 `expand` |
+| 下游消费 | 主要看本包 | `export` + `demo_retriever.py` |
+
+---
+
+## 33. 小白最容易混淆的几个点
+
+### 33.1 `max_chars` 和 `overlap_chars`
+
+`max_chars` 是希望每个 chunk 大概多长。
+
+`overlap_chars` 是相邻切片之间重复多少字符,减少边界处信息丢失。
+
+但现在要记住:
+
+```text
+overlap 不会跨 heading_path 或 block_type 边界。
+```
+
+原因:
+
+```text
+跨章节 overlap 会把上一节内容带到下一节 chunk 里,
+可能造成错误引用。
+```
+
+### 33.2 `overlap` 和 `expand` 的区别
+
+`overlap` 是导入时发生的:
+
+```text
+切 chunk 的时候让相邻片段有一点重复文字。
+```
+
+`expand` 是搜索时发生的:
+
+```text
+命中一个 chunk 后,再把周围 chunk 或同一章节拿回来。
+```
+
+现在版本更推荐把上下文恢复交给 `expand`,因为它更可控、更清楚。
+
+### 33.3 `heading_path` 和 `locator`
+
+`heading_path` 回答:
+
+```text
+这个 chunk 属于哪个章节/哪个 sheet?
+```
+
+`locator` 回答:
+
+```text
+这个 chunk 在原文哪里?第几页、第几段、第几行?
+```
+
+两者都重要:
+
+```text
+heading_path 用来恢复章节上下文。
+locator 用来给用户引用来源。
+```
+
+### 33.4 `DocumentStore` 和 `ChunkStore`
+
+`ChunkStore` 是接口/抽象:
+
+```text
+规定存储后端应该会什么。
+```
+
+`DocumentStore` 是具体实现:
+
+```text
+用 manifest.json + chunks.jsonl 落盘。
+```
+
+---
+
+## 34. 新版回答“为什么不直接上向量库”更有底气
+
+旧版可以说:
+
+```text
+第一版先做轻量闭环。
+```
+
+新版可以进一步说:
+
+> 我没有直接接向量库,不是因为没考虑扩展,而是先把扩展点做出来了。`ChunkStore` 把存储后端隔离出来,`search(expand=...)` 把上下文恢复接口固定下来。以后要加 SQLite、BM25、embedding 或 vector DB,主要是在 store/search 后端扩展,而不是推翻 parser、chunker、CLI 和 nanobot adapter。
+
+这比"以后可以加"更有说服力,因为现在代码里已经有:
+
+```text
+ChunkStore 抽象 + 契约测试
+导出格式 + 独立下游消费 demo
+```
+
+也就是说,扩展能力不是口头承诺,已经有最小证明——但也没有为了多"证明"一点,就多加一个原文没要求的第二个 store 后端或第二个分块策略,这两者早期草稿里都做过,后来因为找不到对应的原文要求而删掉了(见 `DECISIONS.md` D009)。
+
+---
+
+## 35. 新版面试讲法: 60 秒版本
+
+可以这样说:
+
+> 第一版已经实现了 parse、chunk、store、CLI 和 nanobot Tool 的闭环。这一版主要修了几个真实 bug,并把和"上下文感知"直接相关的能力做扎实:heading_path/block_type 改变时强制切块,不再把跨章节内容误标成同一个标题;中文句子切分和小数点保护;`prev_chunk_id`/`next_chunk_id` 真正被 `get_neighbors()` 用起来,加上 `get_section()` 按标题路径动态聚合,`search(expand=...)` 能在命中后恢复邻居或整节上下文。存储层抽成 `ChunkStore` 接口,`DocumentStore`(JSONL)是唯一实现——原始要求是"至少一个内存或本地文件后端",不要求两个都做。CLI 新增 `export`,`scripts/demo_retriever.py` 证明下游不用 import 这个包也能读懂导出的 chunks.jsonl。没有做的东西也想清楚了为什么不做:可插拔分块策略、完整性校验、变更检测、Skill 文件、对照评测——都在原始需求六条 + 交付物清单五条里找不到直接对应,加了就是自选加固,不是必需项。
+
+---
+
+## 36. 新版面试讲法: 关键追问
+
+### 36.1 问: 为什么要有 `ChunkStore`,直接用 `DocumentStore` 不行吗?
+
+答:
+
+> 直接用 `DocumentStore` 能跑,但会把业务逻辑和 JSONL 文件格式绑死。抽出 `ChunkStore` 后,搜索、上下文恢复这些通用能力写在基类里,JSONL/未来 SQLite 后端只实现最小存储 primitives。这样扩展后端时风险更小,也能用 contract tests 保证行为一致。
+
+### 36.2 问: 为什么 `get_section()` 不直接存 parent chunk?
+
+答:
+
+> 现在用动态聚合,也就是按相同 `heading_path` 读取时临时组成 section。这避免了同时维护 child chunks 和 parent chunks 两份数据,不会出现同步问题。代价是 `get_section()` 现在是 O(n) 扫描,但在 JSONL 小规模 demo 场景可以接受。以后如果换 SQLite,可以用索引优化。
+
+### 36.3 问: 为什么 heading_path/block_type 改变时必须 flush?
+
+答:
+
+> 因为 chunk 只能有一个 heading_path。如果把两个章节的 block 合到同一个 chunk,第二个章节的内容会继承第一个章节的 heading_path,造成错误引用。这版把 heading_path 和 block_type 当成硬边界,宁可多切一个 chunk,也不让来源上下文被污染。
+
+### 36.4 问: `expand=section` 和 embedding 检索有什么关系?
+
+答:
+
+> 它们解决的问题不同。embedding 或关键词搜索负责找到候选 chunk;`expand=section` 负责命中后恢复更完整上下文。成熟 RAG 常见做法就是 small-to-big:先用小 chunk 提高检索精度,再把相关大上下文交给模型回答。
+
+### 36.5 问: 为什么没做可插拔分块策略、完整性校验、变更检测、Skill 文件?
+
+答:
+
+> 早期草稿其实都做过——`ChunkerStrategy` 接口加 `FixedSizeChunker` baseline、`validate_export()` 完整性检查、content hash 跳过未变化导入、nanobot Skill 文件。拿到完整的原始需求原文(六条核心能力 + 五条交付物清单)逐条核对后发现,这几项在原文里都找不到直接对应,而是我在参考一份内部评审文档时扩展出来的。原文第 2 条只要求"一种或多种"分块策略,一种讲清楚取舍就够;第 6 条明确说 Tool 和 Skill 是可选实现方式之一,不是都要做;完整性校验和变更检测在存储抽象、导出接口两条要求里都没有出现。所以讨论后把这四项删掉,只留下真正对应原文的部分。这个过程本身记录在 `DECISIONS.md` D008/D009 里,是我认为比"看起来功能很全"更值得讲的一点——知道什么时候该停。
+
+### 36.6 问: 现在还有哪些不足?
+
+答:
+
+> 仍然是关键词搜索,不是语义检索;PDF 依赖可提取文本和 outline,没有 OCR/layout 模型;DOCX 没有解析 Word 表格;`get_section()` 目前是 O(n) 扫描;chunk 长度仍是字符级,不是 tokenizer-aware;`prev`/`next` 链接没有自动完整性校验;重复 ingest 同一文档没有变更检测,会整篇重新解析。这些都记录在 `DESIGN.md` Known Limits 里。
+
+---
+
+## 37. 新版学习路线
+
+如果你已经读完前面旧版手册,建议按这个顺序学习新版:
+
+1. 读 `docs/process/UPGRADE_SUMMARY.md` 和 `DECISIONS.md` D008/D009,先知道升级清单,以及后来撤销了什么、为什么。
+2. 读 `src/doc_chunker/store.py`,重点看 `ChunkStore`、`get_neighbors()`、`get_section()`。
+3. 读 `tests/test_store_contract.py`,理解 contract test。
+4. 读 `src/doc_chunker/chunker.py`,重点看 boundary flush、中文分句、小数点保护。
+5. 读 `src/doc_chunker/cli.py`,看 `--expand`、`export`。
+6. 读 `src/doc_chunker/nanobot_tool.py`,看 Tool schema 如何同步升级。
+7. 跑一次 ingest/search/export,打开 `manifest.json` 和 `chunks.jsonl` 手工看字段。
+8. 跑 `python scripts\demo_retriever.py`,看下游消费 demo。
+9. 最后读 `DESIGN.md` Known Limits,准备回答"还有什么没做"。
+
+---
+
+## 38. 新版最重要的一句话
+
+旧版的灵魂是:
+
+> 我把文档处理拆成 parser、chunker、store、pipeline、CLI、nanobot adapter,先做出能跑的最小闭环。
+
+新版的灵魂是:
+
+> 我在最小闭环上修了几个真实 bug、把上下文恢复能力(边界规则 + `expand`)做扎实、把存储抽象成接口,并且对照完整的原始需求,主动把找不到对应依据的自选加固砍掉了,让这个模块既不缺原文要求的东西,也不多堆没人要求的东西。

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import warnings
 from pathlib import Path
 from typing import Any
 
@@ -19,21 +20,44 @@ def ingest_document(
     file_path = Path(path)
     if not file_path.exists():
         raise FileNotFoundError(f"Document not found: {file_path}")
+    store = DocumentStore(store_dir)
+
     blocks = parse_document(file_path)
     doc_id = _doc_id(file_path)
+
+    requested_overlap = overlap_chars
     if overlap_chars >= max_chars:
         overlap_chars = max(0, max_chars // 5)
+        warnings.warn(
+            f"overlap_chars ({requested_overlap}) >= max_chars ({max_chars}); "
+            f"clamped to {overlap_chars}. This is recorded in the manifest "
+            "instead of being silently applied.",
+            stacklevel=2,
+        )
     config = ChunkingConfig(max_chars=max_chars, overlap_chars=overlap_chars)
     chunks = chunk_blocks(blocks, doc_id=doc_id, config=config)
-    store = DocumentStore(store_dir)
+
+    chunking_meta: dict[str, Any] = {
+        "max_chars": max_chars,
+        "overlap_chars": overlap_chars,
+    }
+    if requested_overlap != overlap_chars:
+        chunking_meta["requested_overlap_chars"] = requested_overlap
+        chunking_meta["overlap_adjusted"] = True
+
     manifest = store.write_document(
         doc_id=doc_id,
         source_file=str(file_path),
         chunks=chunks,
         parser=parser_name(file_path),
-        chunking={"max_chars": max_chars, "overlap_chars": overlap_chars},
+        chunking=chunking_meta,
     )
-    return {"ok": True, "doc_id": doc_id, "chunk_count": len(chunks), "manifest": manifest}
+    return {
+        "ok": True,
+        "doc_id": doc_id,
+        "chunk_count": len(chunks),
+        "manifest": manifest,
+    }
 
 
 def _doc_id(path: Path) -> str:

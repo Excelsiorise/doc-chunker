@@ -1,4 +1,4 @@
-# Study Path
+# 学习路径
 
 这是一份复习路线。你不用一次吃完整个项目,按顺序过就能建立理解。
 
@@ -196,4 +196,3 @@ nanobot agent 能调用的外部能力。Tool 有名字、描述、参数 schema
 ## 最小背诵版
 
 > 我这个项目的核心是把复杂文档先统一成 `DocumentBlock`,再分成带上下文的 `Chunk`。上下文包括来源位置、标题路径、前后 chunk 链接和 metadata。核心库不依赖 nanobot,所以可以用 CLI 和 pytest 独立验证。nanobot 集成通过 Python entry_points 暴露 `DocumentChunkerTool`,ToolLoader 发现它后注册到 ToolRegistry,agent 就能在 WebUI 里调用。第一版没用 Docling、Unstructured、向量库和 MCP,是因为 48 小时任务更需要一个可解释、可测试的小闭环;但 parser/store/adapter 的边界已经给后续升级留好了。
-

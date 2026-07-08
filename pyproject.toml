@@ -8,6 +8,14 @@ dependencies = [
     "openpyxl>=3.1.0",
 ]
 
+[project.optional-dependencies]
+# nanobot is not published on PyPI; this extra documents the intended
+# dependency relationship (`pip install doc-chunker[nanobot]`) even though
+# resolving it currently requires nanobot to be installed from its own
+# local path first. See DECISIONS.md D008.
+nanobot = ["nanobot"]
+test = ["pytest>=8.0.0"]
+
 [project.scripts]
 doc-chunker = "doc_chunker.cli:console_main"
 

@@ -1,4 +1,4 @@
-# DECISIONS.md
+# 决策记录（DECISIONS.md）
 
 设计取舍记录。每条格式:决策 → 备选方案 → 选择理由 → 接口/边界 → 状态。
 按时间顺序追加,不回填修改历史决策(如推翻,新增一条并标注"取代 D00x")。
@@ -172,4 +172,115 @@ CJK 字符占比的简单计数判断 `zh`/`en`/`mixed`,不接入 `langdetect`/`
 经验比例估算(如中文约 1 字符≈1 token、英文约 4 字符≈1 token),不接入 `tiktoken` 之类和
 具体模型绑定的真实分词器——这个字段只用于下游预算的粗略参考,精确到 ±20% 已经够用,接入
 真实 tokenizer 会让存储模块被绑死在某个模型的分词规则上,收益不匹配复杂度。
+**状态**: 已确认。
+
+---
+
+## D008: 承认 D003–D007 字段清单与实现的落差,并记录本轮(REVIEW_FINDINGS.md /
+TODO.md 驱动)升级的关键取舍
+
+**日期**: 2026-07-07
+**背景**: `docs/process/REVIEW_FINDINGS.md`(M1)指出 D003–D007 记录的 `chunk_id` 格式、
+`chunk_type` 枚举、完整字段清单等和 `models.py` 实际实现不一致,且这个落差此前被"面试讲稿
+只引用当前代码"绕开,而不是显式承认。按 M1 的建议,这里不回改 D003–D007 的历史记录,只显式
+声明:**`Chunk`/`DocumentBlock` 的字段清单以当前 `models.py` 为准**,D003–D007 中和实现不符
+的部分(尤其是 D005 提到的 `chunk_type` 字段、D006/D007 讨论稿里列出的 `char_offset` /
+`token_count` / `content_hash` / `element_ids` 等字段)是设计阶段的候选清单,第一版及本轮实现
+做了简化,不代表最终字段集。
+
+**本轮升级实现的决策**(响应 `REVIEW_FINDINGS.md` 和 `TODO.md`,细节见
+`docs/process/UPGRADE_SUMMARY.md`):
+
+- **`ChunkStore` 用 `abc.ABC` 而不是 `Protocol`**:`get_by_document`/`get_neighbors`/
+  `get_section`/`search`/`validate_export` 只依赖三个抽象方法
+  (`write_document`/`load_chunks`/`get_document_info`),所以把它们实现成 ABC 上的具体方法,
+  任何新后端只需要实现这三个方法就能免费获得其余全部行为,不需要重复实现一遍——这是
+  `tests/test_store_contract.py` 能在不改测试代码的前提下,直接参数化接入下一个后端的前提。
+  选 ABC 而不是纯 `Protocol`,是因为需要共享实现代码,不只是共享类型签名。
+- **只实现一个后端(`DocumentStore`/JSONL),不再额外做 `InMemoryChunkStore`**:原始需求是
+  "至少实现一个内存**或**本地文件后端",不是"两个都要"——`DocumentStore` 已经满足这条。
+  最初这一轮实现里加了 `InMemoryChunkStore` 作为第二个后端外加跨后端契约测试,用来更充分地
+  证明"换后端不用改调用方代码";讨论后确认这不是原文要求的必需项,且在当前数据规模下
+  "内存后端更快"这个常见理由也不成立(JSONL 走 `tmp_path` 跑全部测试也就零点几秒),收益主要是
+  "面试展示设计能力"而非实际需要,所以移除,只保留 `ChunkStore` 抽象 + `DocumentStore` 一个
+  实现。契约测试(`tests/test_store_contract.py`)保留,`store` fixture 仍然参数化,新增后端
+  时只需要在 `_make_store()` 里加一行,不需要改测试本身。
+- **`get_section` 是动态聚合,不是物理 parent 块**:按 `TODO.md` P0-2 的取舍,parent
+  在本实现中是"同 `heading_path` 的 chunk 集合"这个逻辑视图,查询时现算,不落盘存储、不需要
+  第二套 ID 体系、文档更新时不需要双层同步。代价是每次 `expand=section` 都要扫一遍
+  `load_chunks()`(当前 O(n) 全量扫描),在 JSONL 单机小数据量场景下可接受;数据量大到需要
+  索引时,这里是清晰的优化切入点。
+- **分块跨边界规则只看 `heading_path` 和 `block_type` 相等性,不做更细粒度的语义边界**:
+  这是 `TODO.md` P0-4 的直接实现,修复了 `REVIEW_FINDINGS.md` C7(合并块时只保留第一个
+  block 的 `heading_path`,导致跨标题内容被张冠李戴)。边界触发时**不**做 overlap 尾部拼接
+  (只有因为 `max_chars` 溢出触发的 flush 才带 overlap)——跨标题的重叠文本本身就会被贴错
+  标签,索性不做。
+- **中文分句正则改为不要求标点后有空格**,同时保护小数点(`3.2` 不会被拆成 `3.` / `2`)。
+  后者是 `scripts/mini_eval.py` 跑出来的真实回归,不是主动设计的边界情况。
+- **`FixedSizeChunker` 作为唯一的第二策略**,不做更多策略(如按 token 数切分):它的角色是
+  给 `RecursiveStructureChunker` 提供一个对照基线,`docs/process/EVAL.md` 里的评测表就是
+  用它证明"结构边界感知"本身的价值,而不是提供一个真正推荐使用的替代策略。
+- **`pip install -e .` 已在本地验证过 entry_points 发现路径**(`REVIEW_FINDINGS.md` C8):
+  `entry_points(group="nanobot.tools")` 能查到
+  `EntryPoint(name='document_chunker', value='doc_chunker.nanobot_tool:DocumentChunkerTool', ...)`。
+  没有进一步写"真正起一个 nanobot `ToolLoader`/`ToolRegistry` 并断言注册成功"的集成测试——
+  这需要给测试引入对 `nanobot` 包本身的依赖,取舍在于是否要让 `doc-chunker` 的 CI 依赖一个
+  未发布到 PyPI 的兄弟项目;当前选择不引入,留作后续如果要做才做的一步,已在
+  `docs/process/UPGRADE_SUMMARY.md` 里如实记录这个边界。
+
+**状态**: 已确认。
+
+---
+
+## D009: 拿到完整原始需求原文(核心能力六条 + 交付物清单五条)后,砍掉四项 D008
+未能对照验证的功能
+
+**日期**: 2026-07-07
+**背景**: D008 记录 D001–D007 时,一些取舍(尤其是 `FixedSizeChunker`、entry_points 验证、
+存储抽象要不要第二后端)是照着 `REVIEW_FINDINGS.md`/`TODO.md` 这两份*派生*文档做的,而不是
+直接对照原始需求原文——这两份文档本身是另一轮会话对原始需求的转述和展开,不等于原文。拿到
+使用者直接贴出的原文后,逐条核对发现原文只有六条"核心能力要求"("文档解析"、"上下文感知的
+分块策略"、"分块质量"、"存储抽象"、"导出接口"、"与基座及上下游的关系")和五条"交付物清单"
+("可运行代码"、"设计文档"、"测试流程"、"如果再给一周会补什么"、"测试结果或demo")——都不包含
+`REVIEW_FINDINGS.md` C4 引用的"CLI 子命令集(至少 ingest/query/export)"这句话,也不包含任何
+"要做对照评测""要有 Skill""要做变更检测""要做完整性校验"的字面要求。
+
+**决策**:砍掉以下四项,因为在原文六条 + 五条交付物里找不到直接对应,且都是"能加分但不是
+必需项"的自选动作,不是"漏了会直接丢分"的缺口:
+
+1. **`FixedSizeChunker` 和整个 `ChunkerStrategy` 可插拔架子**——原文第 2 条是"设计一种或
+   多种分块策略",一种就够;`ChunkerStrategy` Protocol 只有一个真实实现时,是为可插拔性
+   本身付复杂度,而可插拔性不是原文要求的东西。`chunker.py` 退回成一个直接的 `chunk_blocks()`
+   函数,边界规则、中文分句修复、小数点保护这些**正确性修复**保留——它们服务的是原文第 2/3
+   条("保留上下文关系"、"不把一句话拦腰截断"),和"要不要做策略模式"是两回事。
+2. **`scripts/mini_eval.py`(对照评测脚本)**——原文交付物清单里"测试结果或demo"要求的是
+   "展示关键路径正确、核心链路跑通",pytest 套件 + `TESTING.md` 里的手动 demo 命令已经覆盖;
+   一份专门的对照评测(naive vs 边界感知)不在这条要求里,且它的存在前提(`FixedSizeChunker`)
+   已经被砍。
+3. **`skills/document-chunker/SKILL.md`**——原文第 6 条明确写的是"它可以是...nanobot 的
+   Tool 或 Skill,也可以混合",这是给的一组*可选实现方式*,不是"Tool 和 Skill 都要做"。
+   已经用独立包 + CLI + Tool(entry_points)满足这条,再加一份 Skill 属于锦上添花,不是必需项。
+4. **`validate_export()` + `schema_version` + content-hash 跳过未变化导入**——三者都不在
+   原文任何一条里。`validate_export()` 是防御性的完整性校验,`schema_version` 是导出契约加固,
+   content-hash 跳过是增量更新优化——都是"存储抽象"和"导出接口"两条要求之外的自选加固,砍掉
+   之后这两条要求本身(`ChunkStore` 抽象、返回标准结构的 chunk 列表)不受影响。
+
+**继续保留、不受这轮影响的**(逐条核对后确认直接对应原文):
+
+- `ChunkStore` 抽象 + `DocumentStore` 一个后端(对应第 4 条,`D008` 已确认)。
+- `get_neighbors`/`get_section`/`search(expand=...)`(对应第 2 条明确点名的"父子、相邻、
+  章节层级"关系)。
+- 分块边界规则、中文分句修复、小数点保护(对应第 2/3 条)。
+- PDF outline 标题提取(对应第 1 条"基础元数据...标题")。
+- CLI `export` 子命令、`get_by_document`/`search()` 返回标准 chunk 结构(对应第 5 条
+  "导出接口...返回 chunk 列表的标准结构")——`export` 本身不是原文点名的 CLI 命令名,但它是
+  第 5 条要求的一种自然实现方式,保留;`scripts/demo_retriever.py` 作为"下游确实能消费"的
+  可执行证明也保留,因为它服务的正是第 5/6 条,不属于本轮要砍的"自选加固"。
+- `pip install -e .` 验证 entry_points——不是交付物,是验证第 6 条"调用路径"的一次性检查
+  动作,保留验证过的事实记录(见 `TESTING.md`),但不算作代码交付物。
+
+**为什么不回改 D008**:D008 里"`FixedSizeChunker` 作为唯一的第二策略"那条陈述在写下时是
+准确的(描述当时的实现),现在过时,但按本文件开头的约定"不回填修改历史决策",不去改
+D008 原文,这条 D009 是取代它的新记录。
+
 **状态**: 已确认。

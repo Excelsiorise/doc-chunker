@@ -4,9 +4,9 @@ from pathlib import Path
 from zipfile import ZIP_DEFLATED, ZipFile
 
 from openpyxl import Workbook
-import pytest
 
 from doc_chunker.parsers import parse_document
+from pdf_fixtures import write_minimal_pdf, write_outline_pdf
 
 
 def _write_minimal_docx(path: Path) -> None:
@@ -56,13 +56,8 @@ def test_parse_xlsx_extracts_sheet_rows_with_header_metadata(tmp_path: Path) -> 
 
 
 def test_parse_pdf_extracts_page_text(tmp_path: Path) -> None:
-    fitz = pytest.importorskip("fitz")
     path = tmp_path / "sample.pdf"
-    doc = fitz.open()
-    page = doc.new_page()
-    page.insert_text((72, 72), "PDF page text for chunking.")
-    doc.save(path)
-    doc.close()
+    write_minimal_pdf(path, "PDF page text for chunking.")
 
     blocks = parse_document(path)
 
@@ -70,3 +65,23 @@ def test_parse_pdf_extracts_page_text(tmp_path: Path) -> None:
     assert blocks[0].block_type == "page"
     assert blocks[0].locator == {"page": 1}
     assert "PDF page text" in blocks[0].text
+    assert blocks[0].heading_path == []
+    assert blocks[0].metadata["pdf_headings"] == "unavailable"
+
+
+def test_parse_pdf_reads_headings_from_outline(tmp_path: Path) -> None:
+    path = tmp_path / "sample-with-outline.pdf"
+    write_outline_pdf(
+        path,
+        [
+            ("Section One", "Body text for section one."),
+            ("Section Two", "Body text for section two."),
+        ],
+    )
+
+    blocks = parse_document(path)
+
+    assert len(blocks) == 2
+    assert blocks[0].heading_path == ["Section One"]
+    assert blocks[0].metadata["pdf_headings"] == "outline"
+    assert blocks[1].heading_path == ["Section Two"]

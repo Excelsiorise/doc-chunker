@@ -1,5 +1,7 @@
 .tmp/
 .doc_index/
+.demo_index/
+.demo_showcase/
 .pytest_cache/
 __pycache__/
 *.pyc

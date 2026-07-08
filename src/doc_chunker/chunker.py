@@ -26,6 +26,10 @@ def chunk_blocks(
     doc_id: str,
     config: ChunkingConfig | None = None,
 ) -> list[Chunk]:
+    """Merge blocks up to max_chars without crossing a heading or
+    block_type boundary, falling back to sentence-then-hard splitting for
+    oversized blocks. Adds sentence-aware overlap between splits produced
+    from the same oversized block only (see DESIGN.md)."""
     cfg = config or ChunkingConfig()
     chunks: list[Chunk] = []
     buffer: list[DocumentBlock] = []
@@ -41,10 +45,20 @@ def chunk_blocks(
         buffer = []
         buffer_text = ""
 
+    def boundary(block: DocumentBlock) -> bool:
+        if not buffer:
+            return False
+        last = buffer[-1]
+        return last.heading_path != block.heading_path or last.block_type != block.block_type
+
     for block in blocks:
         text = _normalize_ws(block.text)
         if not text:
             continue
+
+        if boundary(block):
+            flush()
+
         if len(text) > cfg.max_chars:
             flush()
             for part in _split_text(text, cfg.max_chars, cfg.overlap_chars):
@@ -58,6 +72,7 @@ def chunk_blocks(
                 )
                 _append_chunk(chunks, doc_id, [split_block], part)
             continue
+
         candidate = f"{buffer_text}\n\n{text}".strip() if buffer_text else text
         if buffer and len(candidate) > cfg.max_chars:
             flush()
@@ -79,6 +94,7 @@ def _append_chunk(chunks: list[Chunk], doc_id: str, blocks: list[DocumentBlock],
     for block in blocks:
         if block.block_type not in block_types:
             block_types.append(block.block_type)
+    metadata = {**first.metadata, "block_types": block_types, "block_count": len(blocks)}
     chunks.append(
         Chunk(
             chunk_id=chunk_id,
@@ -89,7 +105,7 @@ def _append_chunk(chunks: list[Chunk], doc_id: str, blocks: list[DocumentBlock],
             heading_path=first.heading_path,
             prev_chunk_id=None,
             next_chunk_id=None,
-            metadata={"block_types": block_types, "block_count": len(blocks)},
+            metadata=metadata,
         )
     )
 
@@ -113,8 +129,22 @@ def _link_chunks(chunks: list[Chunk]) -> list[Chunk]:
     return linked
 
 
+_SENTENCE_BOUNDARY = re.compile("(?<=[.!?。！？…])\\s*")
+_DECIMAL_POINT = re.compile(r"(?<=\d)\.(?=\d)")
+_DECIMAL_PLACEHOLDER = "\x00"
+
+
 def _split_text(text: str, max_chars: int, overlap_chars: int) -> list[str]:
-    sentences = re.split(r"(?<=[.!?。！？])\s+", text)
+    # Split right after sentence-ending punctuation. Do NOT require trailing
+    # whitespace: real-world Chinese text has no space after full-width
+    # punctuation, and requiring \s+ made this splitter a no-op on Chinese
+    # input (it fell through to _hard_split, i.e. mid-sentence truncation --
+    # see docs/process/REVIEW_FINDINGS.md C6). Decimal points ("3.2x") are
+    # protected first so a number is never split into "3." / "2x".
+    protected = _DECIMAL_POINT.sub(_DECIMAL_PLACEHOLDER, text)
+    sentences = [
+        s.replace(_DECIMAL_PLACEHOLDER, ".") for s in _SENTENCE_BOUNDARY.split(protected) if s.strip()
+    ]
     parts: list[str] = []
     current = ""
     for sentence in sentences:

@@ -1,4 +1,4 @@
-# REVIEW_FINDINGS.md
+# 评审发现（REVIEW_FINDINGS.md）
 
 面试官视角的代码评审。评审对象:另一个 LLM 会话(AI_WORKFLOW.md Session 2/3)在
 `src/doc_chunker/` 下产出的第一版实现,对照原始需求文档(数据模型/接口契约/存储抽象/
